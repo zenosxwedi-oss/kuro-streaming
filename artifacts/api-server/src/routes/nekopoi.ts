@@ -463,7 +463,9 @@ router.get("/episode/:episodeId", async (req: Request, res: Response) => {
     ok(res, {
       title,
       animeId: encodeId(url),
-      defaultStreamingUrl: iframes[0] ?? "",
+      // Prefer direct HLS stream (better quality, no embed player blocking)
+      // Fall back to first iframe embed if HLS is unavailable
+      defaultStreamingUrl: hlsUrl || iframes[0] ?? "",
       hasPrevEpisode: false,
       prevEpisode: null,
       hasNextEpisode: false,

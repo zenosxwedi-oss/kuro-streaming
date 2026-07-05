@@ -2,11 +2,11 @@
  * VideoPlayer — renders a streaming URL inside an in-app WebView.
  *
  * For embed/iframe URLs (playmogo, streampoi, etc.) the URL is loaded directly
- * as the WebView source — no double-iframe wrapping — so the player has full
- * DOM access, cookies work, and autoplay fires correctly.
+ * as the WebView source with a proper Chrome User-Agent so embed players don't
+ * block the request.
  *
- * For direct media files (.m3u8, .mp4) we wrap in a minimal HTML5 <video>
- * so the native media element handles adaptive streaming.
+ * For direct media files (.m3u8, .mp4) we wrap in a minimal HTML5 page that
+ * uses HLS.js for adaptive streaming support on Android.
  */
 import React, { useRef, useState } from 'react';
 import {
@@ -20,6 +20,10 @@ import {
 import WebView from 'react-native-webview';
 import { Feather } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
+
+// Chrome Android UA — many embed players (playmogo, streampoi) block non-browser UAs
+const CHROME_UA =
+  'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 
 interface VideoPlayerProps {
   url: string;
@@ -37,9 +41,9 @@ function isDirectMedia(url: string): boolean {
   }
 }
 
-/** Minimal HTML5 video player for direct .m3u8 / .mp4 URLs */
+/** HTML5 video player with HLS.js for .m3u8 and native fallback for .mp4/.webm */
 function buildVideoHtml(url: string): string {
-  const escaped = url.replace(/"/g, '&quot;');
+  const escaped = url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -51,14 +55,33 @@ video { width:100%; height:100%; object-fit:contain; background:#000; }
 </style>
 </head>
 <body>
-<video
-  src="${escaped}"
-  controls
-  autoplay
-  playsinline
-  webkit-playsinline
-  x5-playsinline
-></video>
+<video id="video" controls autoplay playsinline webkit-playsinline x5-playsinline></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script>
+(function() {
+  var video = document.getElementById('video');
+  var src = "${escaped}";
+  var isHls = src.indexOf('.m3u8') !== -1;
+  if (isHls && typeof Hls !== 'undefined' && Hls.isSupported()) {
+    var hls = new Hls({ enableWorker: false });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, function() { video.play().catch(function(){}); });
+    hls.on(Hls.Events.ERROR, function(e, data) {
+      if (data.fatal) {
+        window.ReactNativeWebView && window.ReactNativeWebView.postMessage('hls_error:' + data.type);
+      }
+    });
+  } else if (isHls && video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari / iOS native HLS
+    video.src = src;
+    video.addEventListener('loadedmetadata', function() { video.play().catch(function(){}); });
+  } else {
+    video.src = src;
+    video.play().catch(function(){});
+  }
+})();
+</script>
 </body>
 </html>`;
 }
@@ -91,7 +114,7 @@ export default function VideoPlayer({ url, title, onError }: VideoPlayerProps) {
   const direct = isDirectMedia(url);
 
   const webViewSource = direct
-    ? { html: buildVideoHtml(url), baseUrl: '' }
+    ? { html: buildVideoHtml(url), baseUrl: 'https://nekopoi.care' }
     : { uri: url };
 
   return (
@@ -111,6 +134,8 @@ export default function VideoPlayer({ url, title, onError }: VideoPlayerProps) {
         originWhitelist={['*']}
         source={webViewSource}
         style={styles.webview}
+        // Use Chrome UA so embed players (playmogo, streampoi, etc.) don't block
+        userAgent={CHROME_UA}
         allowsFullscreenVideo
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
@@ -119,7 +144,7 @@ export default function VideoPlayer({ url, title, onError }: VideoPlayerProps) {
         thirdPartyCookiesEnabled
         sharedCookiesEnabled
         startInLoadingState={false}
-        onLoadStart={() => setLoading(true)}
+        onLoadStart={() => { setLoading(true); setErrored(false); }}
         onLoadEnd={() => setLoading(false)}
         onError={() => {
           setLoading(false);
@@ -127,20 +152,27 @@ export default function VideoPlayer({ url, title, onError }: VideoPlayerProps) {
           onError?.();
         }}
         onHttpError={(e) => {
-          // Ignore minor HTTP errors (e.g. 204, redirects) — only fail on hard errors
+          // Only fail on hard server errors; ignore redirects, 204, etc.
           if (e.nativeEvent.statusCode >= 500) {
             setLoading(false);
             setErrored(true);
             onError?.();
           }
         }}
-        // Allow all top-level navigation — embed players often redirect for
-        // fullscreen, login prompts, and CDN hops that are required to play video.
+        onMessage={(e) => {
+          // HLS.js error from inside the HTML page
+          if (e.nativeEvent.data?.startsWith('hls_error:')) {
+            setLoading(false);
+            setErrored(true);
+            onError?.();
+          }
+        }}
         onShouldStartLoadWithRequest={() => true}
         scrollEnabled={false}
         bounces={false}
         overScrollMode="never"
-        // Android: allow mixed content so http embeds load inside https WebView
+        setSupportMultipleWindows={false}
+        // Allow mixed content so http embeds load inside https WebView on Android
         mixedContentMode={Platform.OS === 'android' ? 'always' : undefined}
       />
     </View>
