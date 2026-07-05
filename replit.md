@@ -1,6 +1,6 @@
-# [Project name]
+# Kuro Streaming
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Aplikasi mobile streaming anime & hentai (Expo + React Native) dengan proxy API untuk nekopoi.
 
 ## Run & Operate
 
