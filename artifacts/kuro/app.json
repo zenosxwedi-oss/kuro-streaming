@@ -14,13 +14,16 @@
       "backgroundColor": "#0d0d16"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kuro.streaming"
     },
     "android": {
+      "package": "com.kuro.streaming",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#0d0d16"
-      }
+      },
+      "permissions": []
     },
     "web": {
       "favicon": "./assets/images/icon.png"

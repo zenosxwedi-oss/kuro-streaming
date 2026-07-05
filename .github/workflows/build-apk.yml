@@ -1,0 +1,112 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js + pnpm ────────────────────────────────────────────────────
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      # ── 3. Java 17 (required by React Native Gradle) ─────────────────────────
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ── 4. Android SDK ───────────────────────────────────────────────────────
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006"
+
+      # ── 5. Gradle cache ──────────────────────────────────────────────────────
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # ── 6. Install workspace dependencies ───────────────────────────────────
+      - name: Install pnpm workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── 7. Expo prebuild → generates android/ native project ─────────────────
+      - name: Run expo prebuild (Android only)
+        working-directory: artifacts/kuro
+        env:
+          EXPO_PUBLIC_DOMAIN: localhost
+          EXPO_PUBLIC_NEKO_BASE: http://localhost/api/nekopoi
+        run: |
+          pnpm exec expo prebuild \
+            --platform android \
+            --no-install \
+            --clean
+
+      # ── 8. Make Gradle wrapper executable ───────────────────────────────────
+      - name: Make gradlew executable
+        working-directory: artifacts/kuro/android
+        run: chmod +x gradlew
+
+      # ── 9. Build debug APK ───────────────────────────────────────────────────
+      - name: Build debug APK
+        working-directory: artifacts/kuro/android
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4g"
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # ── 10. Rename APK ───────────────────────────────────────────────────────
+      - name: Rename APK
+        run: |
+          mkdir -p dist
+          cp artifacts/kuro/android/app/build/outputs/apk/debug/app-debug.apk \
+             dist/kuro-streaming-debug.apk
+
+      # ── 11. Upload APK as downloadable artifact ──────────────────────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuro-streaming-apk
+          path: dist/kuro-streaming-debug.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      # ── 12. Print download info ──────────────────────────────────────────────
+      - name: Print download info
+        run: |
+          echo "✅ APK berhasil di-build!"
+          echo "📦 Nama file: kuro-streaming-debug.apk"
+          echo "📥 Download: Actions tab → run ini → Artifacts section"
+          ls -lh dist/kuro-streaming-debug.apk
